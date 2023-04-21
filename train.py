@@ -16,6 +16,8 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 import torch.optim.lr_scheduler as lr_scheduler
 from tensorboardX import SummaryWriter
+import lovely_tensors as lt
+lt.monkey_patch()
 
 from util import dataset, config
 from util.s3dis import S3DIS

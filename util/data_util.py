@@ -75,8 +75,8 @@ def collate_fn_limit(batch, max_batch_points, logger):
         s = sum([x.shape[0] for x in coord])
         s_now = sum([x.shape[0] for x in coord[:k]])
         logger.warning("batch_size shortened from {} to {}, points from {} to {}".format(len(batch), k, s, s_now))
-
-    return torch.cat(coord[:k]), torch.cat(feat[:k]), torch.cat(label[:k]), torch.IntTensor(offset[:k])
+    a, b, c, d = torch.cat(coord[:k]), torch.cat(feat[:k]), torch.cat(label[:k]), torch.IntTensor(offset[:k])
+    return a, b, c, d
     # return torch.cat(coord), torch.cat(feat), torch.cat(label), torch.IntTensor(offset)
 
 def collate_fn(batch):

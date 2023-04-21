@@ -394,19 +394,20 @@ class KPConvResBlock(nn.Module):
 class Stratified(nn.Module):
     def __init__(self, downsample_scale, depths, channels, num_heads, window_size, up_k, \
             grid_sizes, quant_sizes, rel_query=True, rel_key=False, rel_value=False, drop_path_rate=0.2, \
-            num_layers=4, concat_xyz=False, num_classes=13, ratio=0.25, k=16, prev_grid_size=0.04, sigma=1.0, stem_transformer=False):
+            num_layers=4, concat_xyz=False, num_classes=13, ratio=0.25, k=16, prev_grid_size=0.04, sigma=1.0, stem_transformer=False,
+            features_in_dim = 6):
         super().__init__()
         
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
 
         if stem_transformer:
             self.stem_layer = nn.ModuleList([
-                KPConvSimpleBlock(3 if not concat_xyz else 6, channels[0], prev_grid_size, sigma=sigma)
+                KPConvSimpleBlock(features_in_dim, channels[0], prev_grid_size, sigma=sigma)
             ])
             self.layer_start = 0
         else:
             self.stem_layer = nn.ModuleList([
-                KPConvSimpleBlock(3 if not concat_xyz else 6, channels[0], prev_grid_size, sigma=sigma),
+                KPConvSimpleBlock(features_in_dim, channels[0], prev_grid_size, sigma=sigma),
                 KPConvResBlock(channels[0], channels[0], prev_grid_size, sigma=sigma)
             ])
             self.downsample = TransitionDown(channels[0], channels[1], ratio, k)
