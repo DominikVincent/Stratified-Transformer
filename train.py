@@ -374,7 +374,11 @@ def train(train_loader, model, criterion, optimizer, epoch, scaler, scheduler):
 
         use_amp = args.use_amp
         with torch.cuda.amp.autocast(enabled=use_amp):
+            logger.info("coord: {}, feat: {}, target: {}, offset: {}, batch: {}, neighbor_idx: {}".format(coord.shape, feat.shape, target.shape, offset.shape, batch.shape, neighbor_idx.shape))
+            print("Coordinates range", torch.min(coord, dim=0)[0].p, torch.max(coord, dim=0)[0].p, torch.max(coord, dim=0)[0].norm().item())
+            
             output = model(feat, coord, offset, batch, neighbor_idx)
+            
             assert output.shape[1] == args.classes
             if target.shape[-1] == 1:
                 target = target[:, 0]  # for cls

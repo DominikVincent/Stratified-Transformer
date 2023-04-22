@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
+from lib.pointops2.functions import pointops
+from timm.models.layers import DropPath, trunc_normal_
+from torch_geometric.nn import voxel_grid
+from torch_points3d.core.common_modules import FastBatchNorm1d
 from torch_points3d.modules.KPConv.kernels import KPConvLayer
 from torch_scatter import scatter_softmax
-from timm.models.layers import DropPath, trunc_normal_
-from torch_points3d.core.common_modules import FastBatchNorm1d
-from torch_geometric.nn import voxel_grid
-from lib.pointops2.functions import pointops
+
 
 def get_indice_pairs(p2v_map, counts, new_p2v_map, new_counts, downsample_idx, batch, xyz, window_size, i):
     # p2v_map: [n, k]
@@ -185,7 +186,15 @@ class WindowAttention(nn.Module):
         # # Position embedding
         relative_position = xyz[index_0] - xyz[index_1]
         relative_position = torch.round(relative_position * 100000) / 100000
-        relative_position_index = (relative_position + 2 * self.window_size - 0.0001) // self.quant_size
+        # relative_position_index = (relative_position + 2 * self.window_size - 0.0001) // self.quant_size
+        
+        # the previous code for computing relative_position_index cannot guarantee the lower bound (0)
+        # relative_position_index = (relative_position + 2 * self.window_size - 0.0001) // self.quant_size
+        relative_position_index = (relative_position + 2 * self.window_size) // self.quant_size
+        low_bound, high_bound = 0, 2 * self.quant_grid_length - 1
+        relative_position_index[relative_position_index == low_bound-1] = low_bound
+        relative_position_index[relative_position_index == high_bound+1] = high_bound
+        
         assert (relative_position_index >= 0).all()
         assert (relative_position_index <= 2*self.quant_grid_length - 1).all()
 
@@ -394,7 +403,7 @@ class KPConvResBlock(nn.Module):
 class Stratified(nn.Module):
     def __init__(self, downsample_scale, depths, channels, num_heads, window_size, up_k, \
             grid_sizes, quant_sizes, rel_query=True, rel_key=False, rel_value=False, drop_path_rate=0.2, \
-            num_layers=4, concat_xyz=False, num_classes=13, ratio=0.25, k=16, prev_grid_size=0.04, sigma=1.0, stem_transformer=False,
+            num_layers=4, concat_xyz=False, num_classes=-1, ratio=0.25, k=16, prev_grid_size=0.04, sigma=1.0, stem_transformer=False,
             features_in_dim = 6):
         super().__init__()
         
@@ -419,13 +428,14 @@ class Stratified(nn.Module):
             ratio=ratio, k=k, out_channels=channels[i+1] if i < num_layers-1 else None) for i in range(self.layer_start, num_layers)])
 
         self.upsamples = nn.ModuleList([Upsample(up_k, channels[i], channels[i-1]) for i in range(num_layers-1, 0, -1)])
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(channels[0], channels[0]), 
-            nn.BatchNorm1d(channels[0]), 
-            nn.ReLU(inplace=True), 
-            nn.Linear(channels[0], num_classes)
-        )
+        if num_classes > 0:
+            self.classifier = nn.Sequential(
+                nn.Linear(channels[0], channels[0]), 
+                nn.BatchNorm1d(channels[0]), 
+                nn.ReLU(inplace=True), 
+                nn.Linear(channels[0], num_classes)
+            )
+        self.num_classes = num_classes
 
         self.init_weights()
 
@@ -464,7 +474,10 @@ class Stratified(nn.Module):
         for i, upsample in enumerate(self.upsamples):
             feats, xyz, offset = upsample(feats, xyz, xyz_stack.pop(), offset, offset_stack.pop(), support_feats=feats_stack.pop())
 
-        out = self.classifier(feats)
+        if self.num_classes > 0:
+            out = self.classifier(feats)
+        else:
+            out = feats
 
         return out        
 
