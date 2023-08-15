@@ -1,3 +1,9 @@
+# Fork of https://github.com/dvlab-research/Stratified-Transformer
+We modified the pointops lib to be compatible with our pytorch version. Follow the install instructions as stated below. We struggled to get the requirements working and had to vary the versions of the dependencies. After install the stratified transformer as a local pip module:
+```
+pip install .
+```
+
 # Stratified Transformer for 3D Point Cloud Segmentation
 *Xin Lai<sup>\*</sup>, Jianhui Liu<sup>\*</sup>, Li Jiang, Liwei Wang, Hengshuang Zhao, Shu Liu, Xiaojuan Qi, Jiaya Jia*
 
