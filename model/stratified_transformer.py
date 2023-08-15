@@ -9,15 +9,68 @@ from torch_scatter import scatter_softmax
 
 
 def get_indice_pairs(p2v_map, counts, new_p2v_map, new_counts, downsample_idx, batch, xyz, window_size, i):
+    index_0_new, index_1_new = get_indice_pairs_new(p2v_map, counts, new_p2v_map, new_counts, downsample_idx, batch, xyz, window_size, i)
+    
+    # index_0, index_1 = get_indice_pairs_old(p2v_map, counts, new_p2v_map, new_counts, downsample_idx, batch, xyz, window_size, i)
+    
+    # print(index_0.shape, index_1.shape, index_0_new.shape, index_1_new.shape)
+    # print(torch.all(index_0 == index_0_new), torch.all(index_1 == index_1_new))
+    # assert torch.all(index_0 == index_0_new)
+    # assert torch.all(index_1 == index_1_new)
+    return index_0_new, index_1_new
+
+def get_indice_pairs_new(p2v_map, counts, new_p2v_map, new_counts, downsample_idx, batch, xyz, window_size, i):
+    n, k = p2v_map.shape
+    mask = torch.arange(k, device='cuda').unsqueeze(0) < counts.unsqueeze(-1)  # [n, k]
+    mask_mat = (mask.unsqueeze(-1) & mask.unsqueeze(-2))  # [n, k, k]
+
+    p2v_map = p2v_map.unsqueeze(-1).expand(-1, -1, k)
+    index_0 = torch.where(mask_mat, p2v_map, -1)
+    index_1 = torch.where(mask_mat, p2v_map, -1)
+
+    downsample_mask = torch.zeros_like(batch).bool()  # [N, ]
+    downsample_mask[downsample_idx.long()] = True
+
+    downsample_mask = downsample_mask[new_p2v_map]  # [n, k]
+    n, k = new_p2v_map.shape
+    mask = torch.arange(k, device='cuda').unsqueeze(0) < new_counts.unsqueeze(-1)  # [n, k]
+    downsample_mask = downsample_mask & mask
+    mask_mat = (mask.unsqueeze(-1) & downsample_mask.unsqueeze(-2))  # [n, k, k]
+    xyz_min = xyz.min(0)[0]
+    if i % 2 == 0:
+        window_coord = (xyz[new_p2v_map] - xyz_min) // window_size  # [n, k, 3]
+    else:
+        window_coord = (xyz[new_p2v_map] + 1 / 2 * window_size - xyz_min) // window_size  # [n, k, 3]
+
+    mask_mat_prev = (window_coord.unsqueeze(2) != window_coord.unsqueeze(1)).any(-1)  # [n, k, k]
+    mask_mat = mask_mat & mask_mat_prev  # [n, k, k]
+
+    new_p2v_map_exp = new_p2v_map.unsqueeze(-1).expand(-1, -1, k)
+    new_index_0 = torch.where(mask_mat, new_p2v_map_exp, -1)
+    new_index_1 = torch.where(mask_mat, new_p2v_map_exp.transpose(1, 2), -1)
+
+    index_0 = torch.cat([index_0[index_0 != -1], new_index_0[new_index_0 != -1]], 0)
+    index_1 = torch.cat([index_1[index_1 != -1], new_index_1[new_index_1 != -1]], 0)
+    return index_0, index_1
+
+def get_indice_pairs_old(p2v_map, counts, new_p2v_map, new_counts, downsample_idx, batch, xyz, window_size, i):
     # p2v_map: [n, k]
     # counts: [n, ]
     
     n, k = p2v_map.shape
     mask = torch.arange(k).unsqueeze(0).cuda() < counts.unsqueeze(-1) #[n, k]
     mask_mat = (mask.unsqueeze(-1) & mask.unsqueeze(-2)) #[n, k, k]
-    index_0 = p2v_map.unsqueeze(-1).expand(-1, -1, k)[mask_mat] #[M, ]
-    index_1 = p2v_map.unsqueeze(1).expand(-1, k, -1)[mask_mat] #[M, ]
-
+    
+    p2v_map = p2v_map.unsqueeze(-1)
+    p2v_map = p2v_map.expand(-1, -1, k)
+    # print(p2v_map.shape)
+    # print(mask_mat.shape)
+    index_0 = p2v_map[mask_mat] #[M, ]
+    index_1 = p2v_map[mask_mat] #[M, ]
+    
+    # print(index_0.shape)
+    # print(index_1.shape)
+    
     downsample_mask = torch.zeros_like(batch).bool() #[N, ]
     downsample_mask[downsample_idx.long()] = True
     
@@ -185,15 +238,22 @@ class WindowAttention(nn.Module):
 
         # # Position embedding
         relative_position = xyz[index_0] - xyz[index_1]
+        # print("relative pos:", relative_position)
         relative_position = torch.round(relative_position * 100000) / 100000
+        # print("relative_position_rounded", relative_position)
         # relative_position_index = (relative_position + 2 * self.window_size - 0.0001) // self.quant_size
         
         # the previous code for computing relative_position_index cannot guarantee the lower bound (0)
         # relative_position_index = (relative_position + 2 * self.window_size - 0.0001) // self.quant_size
         relative_position_index = (relative_position + 2 * self.window_size) // self.quant_size
+        # print("relative_position_index", relative_position_index)
+        
         low_bound, high_bound = 0, 2 * self.quant_grid_length - 1
-        relative_position_index[relative_position_index == low_bound-1] = low_bound
-        relative_position_index[relative_position_index == high_bound+1] = high_bound
+        # print("RP", relative_position)
+        # print("RPI", relative_position_index)
+        # print("lowbound:", low_bound, " hightbound:", high_bound)
+        relative_position_index[relative_position_index <= low_bound] = low_bound
+        relative_position_index[relative_position_index >= high_bound] = high_bound
         
         assert (relative_position_index >= 0).all()
         assert (relative_position_index <= 2*self.quant_grid_length - 1).all()

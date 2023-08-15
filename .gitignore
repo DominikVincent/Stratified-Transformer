@@ -1,5 +1,8 @@
 ## General
+logs
 
+wandb
+runs
 
 # Compiled Object files
 *.slo

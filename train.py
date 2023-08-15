@@ -30,6 +30,7 @@ from util.logger import get_logger
 from functools import partial
 from util.lr import MultiStepWithWarmup, PolyLR, PolyLRwithWarmup
 import torch_points_kernels as tp
+import wandb
 
 def get_parser():
     parser = argparse.ArgumentParser(description='PyTorch Point Cloud Semantic Segmentation')
@@ -53,7 +54,7 @@ def main_process():
 
 def main():
     args = get_parser()
-    os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(str(x) for x in args.train_gpu)
+    # os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(str(x) for x in args.train_gpu)
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
     # import torch.backends.mkldnn
@@ -87,6 +88,7 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, argss):
+    wandb.init(project="stratified_transformer", config=argss)
     global args, best_iou
     args, best_iou = argss, 0
     if args.distributed:
@@ -315,6 +317,12 @@ def main_worker(gpu, ngpus_per_node, argss):
             writer.add_scalar('mIoU_train', mIoU_train, epoch_log)
             writer.add_scalar('mAcc_train', mAcc_train, epoch_log)
             writer.add_scalar('allAcc_train', allAcc_train, epoch_log)
+            wandb.log({
+                "train/loss_train": loss_train,
+                "train/mIoU_train": mIoU_train,
+                "train/mAcc_train": mAcc_train,
+                "train/allAcc_train": allAcc_train,
+            })
 
         is_best = False
         if args.evaluate and (epoch_log % args.eval_freq == 0):
@@ -327,6 +335,12 @@ def main_worker(gpu, ngpus_per_node, argss):
                 writer.add_scalar('allAcc_val', allAcc_val, epoch_log)
                 is_best = mIoU_val > best_iou
                 best_iou = max(best_iou, mIoU_val)
+                wandb.log({
+                    "val/loss_val": loss_val,
+                    "val/mIoU_val": mIoU_val,
+                    "val/mAcc_val": mAcc_val,
+                    "val/allAcc_val": allAcc_val,
+                })
 
         if (epoch_log % args.save_freq == 0) and main_process():
             if not os.path.exists(args.save_path + "/model/"):
@@ -342,6 +356,11 @@ def main_worker(gpu, ngpus_per_node, argss):
         writer.close()
         logger.info('==>Training done!\nBest Iou: %.3f' % (best_iou))
 
+
+def visualize_points_with_plotly(points, colors=None):
+    import plotly.graph_objects as go
+    fig = go.Figure(data=[go.Scatter3d(x=points[:,0], y=points[:,1], z=points[:,2], mode='markers', marker=dict(size=1, color=colors))])
+    fig.show()
 
 def train(train_loader, model, criterion, optimizer, epoch, scaler, scheduler):
     batch_time = AverageMeter()
@@ -376,16 +395,34 @@ def train(train_loader, model, criterion, optimizer, epoch, scaler, scheduler):
         with torch.cuda.amp.autocast(enabled=use_amp):
             logger.info("coord: {}, feat: {}, target: {}, offset: {}, batch: {}, neighbor_idx: {}".format(coord.shape, feat.shape, target.shape, offset.shape, batch.shape, neighbor_idx.shape))
             print("Coordinates range", torch.min(coord, dim=0)[0].p, torch.max(coord, dim=0)[0].p, torch.max(coord, dim=0)[0].norm().item())
-            
+            # print unique values in batch
+            print("Unique values in batch", torch.unique(batch))
+            time1 = time.time()
             output = model(feat, coord, offset, batch, neighbor_idx)
-            
+            time2 = time.time()
+            print(f"Took {time2-time1} seconds to forward pass of {output.shape} output")
+            # time the network
+            # with torch.no_grad():
+            #     model.eval()
+            #     num_iterations = 10
+            #     times = []
+            #     for _ in range(num_iterations):
+            #         start_time = time.time()
+            #         _ = model(feat, coord, offset, batch, neighbor_idx)
+            #         torch.cuda.synchronize()  # Ensure computation is done before stopping the timer
+            #         end_time = time.time()
+            #         times.append(end_time - start_time)
+            #     model.train()
+            # avg_time = sum(times) / num_iterations
+            # print("Average inference time: ", avg_time, " seconds")
+
             assert output.shape[1] == args.classes
             if target.shape[-1] == 1:
                 target = target[:, 0]  # for cls
             loss = criterion(output, target)
             
         optimizer.zero_grad()
-        
+        time1 = time.time()
         if use_amp:
             scaler.scale(loss).backward()
             scaler.step(optimizer)
@@ -393,7 +430,9 @@ def train(train_loader, model, criterion, optimizer, epoch, scaler, scheduler):
         else:
             loss.backward()
             optimizer.step()
-
+        time2 = time.time()
+        print("Backward: ", time2 - time1)
+        
         if args.scheduler_update == 'step':
             scheduler.step()
 
@@ -447,6 +486,12 @@ def train(train_loader, model, criterion, optimizer, epoch, scaler, scheduler):
             writer.add_scalar('mIoU_train_batch', np.mean(intersection / (union + 1e-10)), current_iter)
             writer.add_scalar('mAcc_train_batch', np.mean(intersection / (target + 1e-10)), current_iter)
             writer.add_scalar('allAcc_train_batch', accuracy, current_iter)
+            wandb.log({
+                "train/loss": loss_meter.val,
+                "train/mIoU": np.mean(intersection / (union + 1e-10)),
+                "train/mAcc": np.mean(intersection / (target + 1e-10)),
+                "train/allAcc": accuracy,
+            })
 
     iou_class = intersection_meter.sum / (union_meter.sum + 1e-10)
     accuracy_class = intersection_meter.sum / (target_meter.sum + 1e-10)
@@ -455,6 +500,7 @@ def train(train_loader, model, criterion, optimizer, epoch, scaler, scheduler):
     allAcc = sum(intersection_meter.sum) / (sum(target_meter.sum) + 1e-10)
     if main_process():
         logger.info('Train result at epoch [{}/{}]: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.'.format(epoch+1, args.epochs, mIoU, mAcc, allAcc))
+        wandb.log({"train/mIoU": mIoU, "train/mAcc": mAcc, "train/allAcc": allAcc})
     return loss_meter.avg, mIoU, mAcc, allAcc
 
 
@@ -535,8 +581,18 @@ def validate(val_loader, model, criterion):
     allAcc = sum(intersection_meter.sum) / (sum(target_meter.sum) + 1e-10)
     if main_process():
         logger.info('Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.'.format(mIoU, mAcc, allAcc))
+        class_stats = {}
         for i in range(args.classes):
             logger.info('Class_{} Result: iou/accuracy {:.4f}/{:.4f}.'.format(i, iou_class[i], accuracy_class[i]))
+            class_stats[f"val/miou_class_{i}"] = iou_class[i]
+            class_stats[f"val/acc_class_{i}"] = accuracy_class[i]
+        wandb.log({
+            "val/loss": loss_meter.val,
+            "val/mIoU": mIoU,
+            "val/mAcc": mAcc,
+            "val/allAcc": allAcc,
+            **class_stats
+        })
         logger.info('<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<')
     
     return loss_meter.avg, mIoU, mAcc, allAcc

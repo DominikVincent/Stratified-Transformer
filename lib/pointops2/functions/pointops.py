@@ -147,7 +147,7 @@ class AttentionStep1_v2(Function):
         output: output: [N, h, C//h]
         """
         assert q.is_contiguous() and k.is_contiguous() and index0_offsets.is_contiguous() and index1.is_contiguous()
-        print(n_max)
+        # print(n_max)
         assert n_max <= 1024
 
         N_q, h, C_div_h = q.shape

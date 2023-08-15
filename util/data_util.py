@@ -5,7 +5,7 @@ import SharedArray as SA
 import torch
 
 from util.voxelize import voxelize
-
+import plotly.graph_objects as go
 
 def sa_create(name, var):
     x = SA.create(name, var.shape, dtype=var.dtype)
@@ -119,6 +119,14 @@ def load_kitti_label(label_path, remap_lut):
     sem_label = remap_lut[sem_label]
     return sem_label.astype(np.int32)
 
+def create_scatter(coord, name='Scatter3d'):
+    x, y, z = coord[:,0], coord[:,1], coord[:,2]
+    fig = go.Figure(data=[go.Scatter3d(x=x, y=y, z=z, mode='markers', marker=dict(size=1, opacity=0.8))])
+    fig.update_layout(scene=dict(xaxis_title='X',
+                                  yaxis_title='Y',
+                                  zaxis_title='Z'),
+                      title=name)
+    fig.show()
 
 def data_prepare(coord, feat, label, split='train', voxel_size=0.04, voxel_max=None, transform=None, shuffle_index=False):
     if transform:
